@@ -7,6 +7,8 @@
 pub mod account;
 pub mod imap_client;
 pub mod mail;
+pub mod prompts;
+pub mod triage;
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
