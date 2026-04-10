@@ -317,7 +317,7 @@ humOS (user-facing personal OS)
   └── standalone:    humos-*  binaries (mail, cal, tasks, etc.)
 
 tala (knowledge base)
-  └── no runtime dependencies (Elixir app, git repos on disk)
+  └── no runtime dependencies (Rust binary, git repos on disk)
 
 abot (headless CLI)
   └── no runtime dependencies (just git)
