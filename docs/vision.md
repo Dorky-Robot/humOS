@@ -50,15 +50,19 @@ standalone, composable binaries — one per module.
 humos-mail     reads mail from ~/.humOS/mail/
 humos-fetch    pulls mail in via native IMAP, per-account
 humos-send     (future) sends mail via native SMTP
+humos-triage   AI-powered mail classification via local Ollama
 humos-web      localhost browser UI for normies
+humos-index    cross-cutting search across mail, notes, tasks, etc.
 humos-cal      (future) owns ~/.humOS/cal/
-humos-notes    (future) owns ~/.humOS/notes/
+humos-tasks    (future) owns ~/.humOS/tasks/
 ...
 ```
 
-Each binary only knows its own directory in `~/.humOS/`. Binaries compose via
-pipes and shell today, and will be driven by a higher-level autopilot later.
-The feel should be closer to coreutils than to Emacs.
+Each binary only knows its own directory in `~/.humOS/`. The exception is
+`humos-index`, which reads across `~/.humOS/` and `~/.tala/` but only
+writes to `~/.humOS/index/`. Binaries compose via pipes and shell today,
+and will be driven by a higher-level autopilot later. The feel should be
+closer to coreutils than to Emacs.
 
 ### 3. Own the protocols a normie needs; delegate the rest
 

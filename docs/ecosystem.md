@@ -41,7 +41,83 @@ never wants AI can use `humos-fetch` and `humos-mail` and get value.
   tasks/         ← humos-tasks (planned)
   fin/           ← humos-fin (planned)
   prompts/       ← reusable LLM prompt templates
+  index/         ← humos-index (cross-cutting search)
 ```
+
+#### humos-index — cross-cutting search
+
+A standalone binary that lives in the humOS repo but runs
+independently. Indexes content across the entire ecosystem into a
+unified SQLite FTS5 database, so "find everything about Project X"
+returns results from mail, notes, tasks, calendar — wherever the
+answer lives.
+
+```
+~/.humOS/index/
+  index.db           ← SQLite FTS5 + metadata
+  sources.json       ← registered directories + content types
+```
+
+**Sources** are registered directories with a content type and a
+glob pattern that tells the indexer where to find documents:
+
+```bash
+# Register what to index
+humos-index source add tala   ~/.tala/notes   --type markdown --pattern "*/note.md"
+humos-index source add mail   ~/.humOS/mail   --type email    --pattern "*/INBOX/{new,cur}/*"
+humos-index source add tasks  ~/.humOS/tasks  --type markdown --pattern "*/*.md"
+
+# Search across everything
+humos-index search "project deadline"
+# → tala:   "Q2 Planning" (note abc123, line 14)
+# → mail:   "Re: deadline update" (gmail/INBOX/new/msg456)
+# → tasks:  "Submit proposal" (submit-proposal/description.md)
+
+# Filter by source
+humos-index search "project deadline" --source tala
+humos-index search "project deadline" --source mail
+
+# JSON output for piping to other tools / agents
+humos-index search "project deadline" --json
+
+# Rebuild a specific source or everything
+humos-index reindex              # all sources
+humos-index reindex --source mail  # just mail
+```
+
+**Design principles:**
+
+- **Read-only observer.** Never writes to `~/.tala/` or other tool
+  directories. Only reads content, only writes to `~/.humOS/index/`.
+  Cannot corrupt data.
+- **Source-agnostic.** Each source is a directory + glob + content
+  type. Adding a new tool to the index is one command, not a code
+  change.
+- **Provenance-tagged.** Every result includes source name, file
+  path, and content type. The caller knows where the result came
+  from.
+- **Pipe-friendly.** `--json` flag outputs NDJSON. Agents and
+  scripts can consume results programmatically.
+- **No daemon required.** Stays fresh via explicit `reindex` calls.
+  Each tool can trigger reindex after writes:
+  `humos-fetch && humos-index reindex --source mail`. If a watcher
+  is wanted later, it's an optional mode, not the default.
+- **Runs alone.** Part of the humOS repo but usable without any
+  other humOS binary. `brew install humos` includes it.
+
+**Implementation:**
+
+- SQLite with FTS5 extension (same rusqlite + bundled as tala-core)
+- Content extractors per type: `markdown` (plain text), `email`
+  (headers + body via mail-parser), `json` (configurable fields)
+- Each indexed document stored as: `{source, path, title, body,
+  modified, metadata}`
+- Incremental reindex: tracks file mtime, only re-parses changed
+  files
+
+**Future: semantic search.** Optional embeddings via local Ollama
+(same pattern as humos-triage). Store vectors in SQLite alongside
+FTS5. Requires a model running locally — never phones home.
 
 See [vision.md](vision.md) for full design principles.
 
@@ -350,6 +426,7 @@ Wiki        = tala (knowledge base — notes, docs, SOPs)
 Mailroom    = humos-fetch + humos-triage (inputs)
 Outbox      = humos-send (outputs)
 Filing      = ~/.humOS/ (the human's data)
+Search      = humos-index (find anything across the company)
 HR          = abot create/clone/integrate (agent lifecycle)
 Archive     = yelo (offsite backup, cold storage)
 Reception   = tunnels (public-facing portal to services)
