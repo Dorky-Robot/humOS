@@ -48,8 +48,9 @@ standalone, composable binaries — one per module.
 
 ```
 humos-mail     reads mail from ~/.humOS/mail/
-humos-fetch    pulls mail in via mbsync, per-account
-humos-send     sends mail out via msmtp, per-account
+humos-fetch    pulls mail in via native IMAP, per-account
+humos-send     (future) sends mail via native SMTP
+humos-web      localhost browser UI for normies
 humos-cal      (future) owns ~/.humOS/cal/
 humos-notes    (future) owns ~/.humOS/notes/
 ...
@@ -59,27 +60,24 @@ Each binary only knows its own directory in `~/.humOS/`. Binaries compose via
 pipes and shell today, and will be driven by a higher-level autopilot later.
 The feel should be closer to coreutils than to Emacs.
 
-### 3. Delegate solved problems to existing tools
+### 3. Own the protocols a normie needs; delegate the rest
 
-Where the Unix ecosystem already has a mature tool — or a sibling Dorky-Robot
-project already solves a problem cleanly — humOS uses it rather than
-reinventing it. Mail is the obvious external-tool example:
+humOS speaks IMAP and (soon) SMTP natively via Rust crates (`imap`,
+`native-tls`, eventually `lettre`). This keeps the install zero-dep: a normie
+runs `humos-web`, pastes an app password, clicks Sync, and sees mail. No
+`brew install isync`, no `.mbsyncrc`, no external tools to install.
 
-- Fetching IMAP → Maildir: `mbsync` (isync). humos does not speak IMAP.
-- Sending SMTP: `msmtp`. humos does not speak SMTP.
-- Reading: `humos-mail` walks the Maildir that `mbsync` produced.
+Passwords are stored in the OS keyring via the `keyring` crate (macOS
+Keychain, Linux libsecret, Windows Credential Manager). A `password.cmd`
+file is a power-user override for plugging in `1password-cli`, `pass`, etc.
 
-And for one narrow slice of human coordination — *piping data through a
-human as if they were a Unix command* — the sibling project
+For coordination with other humans — *piping data through a human as if
+they were a Unix command* — the sibling project
 [`tao`](https://github.com/Dorky-Robot/tao) owns the primitive: it blocks
 a pipeline on a human's reply, resumes when the reply arrives, and composes
 the reply back into the pipeline. humOS does not reimplement that interrupt
 mechanism. tao is one primitive within the broader "coordination with
 humans" module area; it is not the whole of it.
-
-humOS's job is to own the file-based DB layout, derive at runtime whatever
-configuration those tools need from that layout, and glue things together —
-not to reimplement protocols that are already solved.
 
 ### 4. CLI-first
 
@@ -119,18 +117,19 @@ globals.
 ```
 
 - `ls ~/.humOS/mail/` is the list of accounts.
-- Adding a new account is `mkdir ~/.humOS/mail/fastmail` followed by a handful
-  of `echo > file` commands.
-- `humos-fetch gmail` reads `~/.humOS/mail/gmail/imap.*` and `password.cmd`,
-  synthesizes an mbsync invocation in memory, and writes new mail into
-  `~/.humOS/mail/gmail/INBOX/`.
+- Adding a new account: `humos-web` → "Add account" form (or `mkdir` + `echo`
+  for power users). Password goes into the OS keyring; `password.cmd` is an
+  optional override.
+- `humos-fetch gmail` reads `~/.humOS/mail/gmail/imap.*`, retrieves the
+  password from the keyring, connects via native IMAP, and writes new mail
+  into `~/.humOS/mail/gmail/INBOX/new/`.
 - `humos-mail` walks `~/.humOS/mail/*/INBOX/{new,cur}` and shows unread counts
   and summaries.
-- `humos-send --account gmail < message.eml` reads `~/.humOS/mail/gmail/smtp.*`
-  + `password.cmd` and invokes msmtp.
+- `humos-web` serves a localhost browser UI with add-account, sync, and
+  archive.
 
-No persistent mbsyncrc, no persistent msmtprc, no god file. The file-based DB
-is the source of truth; the external tools receive derived invocations.
+No god file. The file-based DB is the source of truth; passwords live in the
+OS keyring, not on disk.
 
 ## Modules
 
@@ -140,9 +139,10 @@ contracts.
 
 **In progress:**
 
-- **Mail** (`humos-mail`) — reads multi-account Maildir from
-  `~/.humOS/mail/`. Fetching and sending are upcoming: `humos-fetch` wraps
-  `mbsync`; `humos-send` wraps `msmtp`.
+- **Mail** (`humos-mail`, `humos-fetch`, `humos-web`) — multi-account Maildir
+  under `~/.humOS/mail/`. `humos-fetch` pulls mail via native IMAP.
+  `humos-web` provides a localhost browser UI with account setup, sync, and
+  archive. Sending via native SMTP is upcoming.
 
 **Planned, humOS-native:**
 
