@@ -152,8 +152,12 @@ contracts.
 - **Calendar** (`humos-cal`) — read/write `~/.humOS/cal/`, ical-compatible.
 - **Tasks** (`humos-tasks`) — `~/.humOS/tasks/`.
 - **Autopilot** — the layer that stitches modules together into recurring
-  routines and responses. Intentionally vague; will be scoped once the
-  modules exist.
+  routines and responses. humOS is the "company"; agents (via `abot`) are
+  the workers; rooms (via `kubo`) are where they work; the human approves
+  results (via `tao`). Autopilot watches `~/.humOS/` for signals (new
+  mail, new tasks, calendar events), dispatches agents to handle them,
+  and gates the human for approval before external actions. See
+  [ecosystem.md](ecosystem.md) for the full architecture.
 
 **Delegated to sibling Dorky-Robot projects:**
 
@@ -166,6 +170,16 @@ contracts.
 - **Pipe-to-a-human — [`tao`](https://github.com/Dorky-Robot/tao).** See
   the "Coordination with other humans" section below for the full
   discussion.
+- **Agent identities — [`abot`](https://github.com/Dorky-Robot/abot).**
+  A headless CLI that manages AI agent identities as git repositories.
+  Agents can be cloned, employed into rooms (via git worktrees),
+  and integrated back (via git merge). humOS shells out to `abot` when
+  it needs to dispatch work to an AI agent. See
+  [ecosystem.md](ecosystem.md) for how abot, kubo, tao, and humOS
+  compose.
+- **Container rooms — [`kubo`](https://github.com/Dorky-Robot/kubo).**
+  Isolated Docker containers where agents work. humOS shells out to
+  `kubo` to create rooms and mount agent working directories into them.
 
 ### Coordination with other humans
 
