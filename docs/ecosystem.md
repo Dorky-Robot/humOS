@@ -11,14 +11,16 @@ agents self-organize around signals from the human's data.
 
 ## The primitives
 
-Five standalone tools, each doing one thing:
+Seven standalone tools, each doing one thing:
 
 ```
-humOS   the human's data (mail, calendar, tasks, finances)
-tala    the knowledge base (notes, docs, todos — git-backed markdown)
-abot    AI agent identities (create, clone, employ, integrate)
-kubo    containerized rooms where agents work
-tao     pipe-to-a-human (block a pipeline on human approval)
+humOS     the human's data (mail, calendar, tasks, finances)
+tala      the knowledge base (notes, docs, todos — git-backed markdown)
+abot      AI agent identities (create, clone, employ, integrate)
+kubo      containerized rooms where agents work
+tao       pipe-to-a-human (block a pipeline on human approval)
+yelo      remote storage (S3/Glacier, local-first cache)
+tunnels   public exposure (Cloudflare tunnels to subdomains)
 ```
 
 Each is installed independently. Each is useful on its own. humOS
@@ -158,6 +160,64 @@ Supports three modes:
 State in `~/.tao/`. IMAP polling daemon for email replies. SQLite for
 suspend/resume. See [tao README](https://github.com/Dorky-Robot/tao).
 
+### yelo — remote storage
+
+FTP-style CLI for S3 and Glacier. Local-first with a cache at
+`~/.yelo/cache/`, background daemon that auto-downloads when Glacier
+restores complete. Treats S3 as a filesystem: `cd`, `ls`, `get`,
+`put`, `freeze` (archive to Glacier), `thaw` (restore from Glacier).
+
+```bash
+yelo cd my-bucket:backups/     # navigate
+yelo ls -l                     # list with storage classes
+yelo put notes-export.tar.gz   # upload (default: DEEP_ARCHIVE)
+yelo freeze large-file.zip     # explicit Glacier archive
+yelo thaw important.tar.gz     # restore from Glacier
+yelo get important.tar.gz      # download (from cache if available)
+```
+
+humOS uses yelo for:
+- **Offsite backup** of `~/.humOS/` and `~/.tala/` data
+- **Cold storage** for large assets (attachments, archives)
+- **Sharing** files with others via pre-signed URLs or restored copies
+
+The daemon (`yelo daemon start`) polls for Glacier restore completion
+and auto-downloads to `~/.yelo/cache/`. State lives in filesystem:
+`~/.yelo/notifications/` for restore tracking, `~/.config/yelo/` for
+config and session state. Same choreography-via-files pattern as
+everything else.
+
+See [yelo README](https://github.com/Dorky-Robot/yelo).
+
+### tunnels — public exposure
+
+Manages Cloudflare Zero Trust tunnels. Exposes local services to
+public subdomains — one command to go from `localhost:3000` to
+`app.example.com`. TUI for interactive management, CLI for scripting.
+
+```bash
+tunnels route add app.example.com 3000 --tunnel prod
+# creates ingress rule + DNS CNAME, idempotent
+
+tunnels service scan
+# discovers all listening ports via lsof
+
+tunnels heal
+# restarts tunnels with zero edge connections
+```
+
+humOS uses tunnels for:
+- **Exposing tala** to collaborators (share notes at a subdomain)
+- **Exposing humos-web** for remote access to your own data
+- **Agent portals** — an agent working in a kubo can spin up a
+  preview server, and tunnels exposes it so the human can review
+
+Tunnels manages LaunchAgents (macOS) for auto-start at login, handles
+DNS record creation, and tracks service health. Config at
+`~/.config/tunnels/config.json`.
+
+See [tunnels README](https://github.com/Dorky-Robot/tunnels).
+
 ## How they compose
 
 The primitives don't depend on each other at the library level. They
@@ -217,15 +277,44 @@ abot integrate coder pr-fix
 kubo rm pr-fix
 ```
 
+### Example: share a tala note publicly
+
+```bash
+# Start tala on a local port
+tala start --port 4000
+
+# Expose it to a subdomain
+tunnels route add notes.example.com 4000 --tunnel personal
+
+# Anyone with the URL can now access your notes
+# Tear it down when done
+tunnels route rm notes.example.com --tunnel personal
+```
+
+### Example: offsite backup of humOS data
+
+```bash
+# Archive your mail and notes to Glacier
+tar czf - ~/.humOS/mail/ | yelo put humos-mail-backup.tar.gz
+tar czf - ~/.tala/notes/ | yelo put tala-notes-backup.tar.gz
+
+# Restore later
+yelo thaw humos-mail-backup.tar.gz       # initiate Glacier restore
+yelo daemon start                         # auto-downloads when ready
+# ... hours later, file appears in ~/.yelo/cache/
+```
+
 ## Dependency graph
 
 ```
 humOS (user-facing personal OS)
-  ├── shells out to: abot  (agent identity management)
-  ├── shells out to: kubo  (container rooms)
-  ├── shells out to: tao   (human approval gates)
-  ├── reads/writes:  tala  (knowledge base — shared git repos)
-  └── standalone:    humos-* binaries (mail, cal, tasks, etc.)
+  ├── shells out to: abot     (agent identity management)
+  ├── shells out to: kubo     (container rooms)
+  ├── shells out to: tao      (human approval gates)
+  ├── shells out to: yelo     (remote backup/storage)
+  ├── shells out to: tunnels  (expose services publicly)
+  ├── reads/writes:  tala     (knowledge base — shared git repos)
+  └── standalone:    humos-*  binaries (mail, cal, tasks, etc.)
 
 tala (knowledge base)
   └── no runtime dependencies (Elixir app, git repos on disk)
@@ -238,11 +327,18 @@ kubo (headless CLI)
 
 tao (headless CLI)
   └── no runtime dependencies (IMAP/SMTP built in)
+
+yelo (remote storage)
+  └── requires: AWS credentials (~/.aws/)
+
+tunnels (public exposure)
+  └── requires: cloudflared + Cloudflare account
 ```
 
 No circular dependencies. Each tool is installable and usable alone.
-humOS is the composition layer that wires them together. tala and
-humOS share data via the filesystem (git repos), not library linking.
+humOS is the composition layer that wires them together. Tools share
+data via the filesystem (git repos, JSON/YAML config), not library
+linking.
 
 ## The company metaphor
 
@@ -255,6 +351,8 @@ Mailroom    = humos-fetch + humos-triage (inputs)
 Outbox      = humos-send (outputs)
 Filing      = ~/.humOS/ (the human's data)
 HR          = abot create/clone/integrate (agent lifecycle)
+Archive     = yelo (offsite backup, cold storage)
+Reception   = tunnels (public-facing portal to services)
 ```
 
 The company has a flat structure. No manager agents. No hierarchy.
@@ -285,15 +383,13 @@ the core stack but are not required:
 sipag       PR automation agent
 katulong    web terminal / remote session sharing
 diwa        git history knowledge base
-tunnels     Cloudflare tunnel management
 hulma       Claude Code project scaffolder
 sabihin     notification relay
-yelo        S3/Glacier file management
 ```
 
 These are independent projects. Some are used inside kubos (diwa,
-sipag). Some are used alongside humOS (tala for notes). None are
-required by the core stack.
+sipag). Some scaffold tooling (hulma). None are required by the core
+stack.
 
 ## Install
 
@@ -304,11 +400,15 @@ brew install tala         # knowledge base (notes, docs)
 brew install abot         # agent identities
 brew install kubo         # container rooms (needs Docker)
 brew install tao          # human approval gates
+brew install yelo         # remote storage (needs AWS creds)
+brew install tunnels      # public exposure (needs cloudflared)
 
 # Or just the parts you need
 brew install humos        # works alone for mail/cal/tasks
 brew install tala         # works alone as a notes app
 brew install abot kubo    # works alone for agent workflows
+brew install yelo         # works alone for S3/Glacier
+brew install tunnels      # works alone for tunnel management
 ```
 
 ## Design constraints
