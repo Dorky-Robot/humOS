@@ -11,17 +11,18 @@ agents self-organize around signals from the human's data.
 
 ## The primitives
 
-Four standalone CLI tools, each doing one thing:
+Five standalone tools, each doing one thing:
 
 ```
 humOS   the human's data (mail, calendar, tasks, finances)
+tala    the knowledge base (notes, docs, todos — git-backed markdown)
 abot    AI agent identities (create, clone, employ, integrate)
 kubo    containerized rooms where agents work
 tao     pipe-to-a-human (block a pipeline on human approval)
 ```
 
 Each is installed independently. Each is useful on its own. humOS
-composes all three into a personal automation system, but a developer
+composes the others into a personal automation system, but a developer
 building something completely different could use abot + kubo + tao
 without humOS.
 
@@ -41,6 +42,49 @@ never wants AI can use `humos-fetch` and `humos-mail` and get value.
 ```
 
 See [vision.md](vision.md) for full design principles.
+
+### tala — the knowledge base
+
+A self-hosted notes service where every note is its own git repo.
+Markdown content, per-note version history, branch-based variations.
+Runs as a standalone web app (Elixir/OTP) and exposes a REST API.
+
+```
+~/.tala/notes/
+  {UUID}/                  ← one git repo per note
+    .git/
+    note.md                ← markdown content (committed)
+    meta.json              ← {"title", "created", "tags"} (committed)
+    assets/                ← images, PDFs, etc. (not git-tracked)
+    drafts/                ← crash recovery (not git-tracked)
+```
+
+Three interfaces to the same data:
+
+| Who | How | When |
+|---|---|---|
+| Human | tala web app (browser) | reading, writing, organizing |
+| humOS binaries | read/write note.md + meta.json + git directly | tagging, linking, searching |
+| Agents (abots) | tala REST API from inside a kubo | drafting docs, looking up context, updating notes |
+
+The git repos are the contract. tala-the-web-app is one frontend.
+humOS can read/write the same repos directly — no server needed for
+local access. Agents use the API when the server is running, giving
+them full CRUD on the knowledge base.
+
+Key behaviors:
+- Default branch is `"original"` (not main/master)
+- Variations are git branches (cheap, local)
+- note.md and meta.json are always committed together
+- Assets and drafts are gitignored — not versioned
+- UUIDs are permanent note identifiers
+- REST API returns: `{id, title, content, meta, branch, sha}`
+
+Tala is also how Notion notes migrate into humOS. Export from Notion
+as markdown, run an import script that `git init`s each page into
+`~/.tala/notes/{UUID}/`, and tala picks them up immediately.
+
+See [tala README](https://github.com/Dorky-Robot/tala).
 
 ### abot — the agent primitive
 
@@ -177,10 +221,14 @@ kubo rm pr-fix
 
 ```
 humOS (user-facing personal OS)
-  ├── shells out to: abot (agent identity management)
-  ├── shells out to: kubo (container rooms)
-  ├── shells out to: tao  (human approval gates)
+  ├── shells out to: abot  (agent identity management)
+  ├── shells out to: kubo  (container rooms)
+  ├── shells out to: tao   (human approval gates)
+  ├── reads/writes:  tala  (knowledge base — shared git repos)
   └── standalone:    humos-* binaries (mail, cal, tasks, etc.)
+
+tala (knowledge base)
+  └── no runtime dependencies (Elixir app, git repos on disk)
 
 abot (headless CLI)
   └── no runtime dependencies (just git)
@@ -193,7 +241,8 @@ tao (headless CLI)
 ```
 
 No circular dependencies. Each tool is installable and usable alone.
-humOS is the composition layer that wires them together.
+humOS is the composition layer that wires them together. tala and
+humOS share data via the filesystem (git repos), not library linking.
 
 ## The company metaphor
 
@@ -201,6 +250,7 @@ humOS is the composition layer that wires them together.
 CEO         = the human (approves via tao)
 Workers     = abots (AI agents with git-backed identities)
 Offices     = kubos (Docker rooms where work happens)
+Wiki        = tala (knowledge base — notes, docs, SOPs)
 Mailroom    = humos-fetch + humos-triage (inputs)
 Outbox      = humos-send (outputs)
 Filing      = ~/.humOS/ (the human's data)
@@ -232,7 +282,6 @@ The broader Dorky Robot ecosystem includes tools that integrate with
 the core stack but are not required:
 
 ```
-tala        self-hosted notes (Elixir, git-backed per-note history)
 sipag       PR automation agent
 katulong    web terminal / remote session sharing
 diwa        git history knowledge base
@@ -251,12 +300,14 @@ required by the core stack.
 ```bash
 # The full stack
 brew install humos        # personal data + automation
+brew install tala         # knowledge base (notes, docs)
 brew install abot         # agent identities
 brew install kubo         # container rooms (needs Docker)
 brew install tao          # human approval gates
 
 # Or just the parts you need
 brew install humos        # works alone for mail/cal/tasks
+brew install tala         # works alone as a notes app
 brew install abot kubo    # works alone for agent workflows
 ```
 
