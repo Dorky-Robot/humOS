@@ -47,33 +47,56 @@ humOS is not a single `humos` CLI with subcommands. It is a suite of small,
 standalone, composable binaries — one per module.
 
 ```
-humos-mail     reads mail from ~/.humOS/mail/
-humos-fetch    pulls mail in via native IMAP, per-account
-humos-send     (future) sends mail via native SMTP
+humos-mail     agent-facing CLI for reading/triaging/composing mail in
+               ~/.humOS/mail/; wraps himalaya and adds cross-account verbs
+humos-fetch    pulls mail per-account (himalaya under the hood)
+humos-send     (future) sends mail (himalaya under the hood)
 humos-triage   AI-powered mail classification via local Ollama
-humos-web      localhost browser UI for normies
-humos-index    cross-cutting search across mail, notes, tasks, etc.
-humos-cal      (future) owns ~/.humOS/cal/
-humos-tasks    (future) owns ~/.humOS/tasks/
+humos-web      localhost browser UI for normies (account setup, sync, archive)
+humos-index    cross-cutting search across mail and tala notes;
+               parses GFM checkboxes and inline dates into todo/event views
+humos-cal      (future) a view over tala notes with date frontmatter
+humos-tasks    (future) a view over GFM checkboxes in tala notes
 ...
 ```
 
-Each binary only knows its own directory in `~/.humOS/`. The exception is
-`humos-index`, which reads across `~/.humOS/` and `~/.tala/` but only
-writes to `~/.humOS/index/`. Binaries compose via pipes and shell today,
-and will be driven by a higher-level autopilot later. The feel should be
-closer to coreutils than to Emacs.
+Each binary only knows its own directory in `~/.humOS/`. Read-across
+binaries are the exception: `humos-index` reads across `~/.humOS/` and
+`~/.tala/` but only writes to `~/.humOS/index/`; `humos-tasks` and
+`humos-cal` are thin views over tala notes (via humos-index) and own
+no storage of their own. Binaries compose via pipes and shell today,
+and will be driven by a higher-level autopilot later. The feel should
+be closer to coreutils than to Emacs.
 
 ### 3. Own the protocols a normie needs; delegate the rest
 
-humOS speaks IMAP and (soon) SMTP natively via Rust crates (`imap`,
-`native-tls`, eventually `lettre`). This keeps the install zero-dep: a normie
-runs `humos-web`, pastes an app password, clicks Sync, and sees mail. No
-`brew install isync`, no `.mbsyncrc`, no external tools to install.
+humOS delegates IMAP and SMTP to
+[himalaya](https://github.com/pimalaya/himalaya), a Rust CLI email client
+with JSON output and a Maildir backend. `humos-mail` wraps it: adds
+cross-account verbs (himalaya operates one account at a time) and
+integrates with humos-index for unified search across accounts + tala.
+The file-based DB (`~/.humOS/mail/{account}/{address,imap.host,...}`)
+remains the source of truth; `humos-mail` generates
+`~/.config/himalaya/config.toml` from it as a derived artifact — the
+god-file pattern stays outside our principles. A normie still runs
+`humos-web`, pastes an app password, and clicks Sync — `brew install humos`
+pulls himalaya as a dependency, so there's nothing else to install.
 
-Passwords are stored in the OS keyring via the `keyring` crate (macOS
-Keychain, Linux libsecret, Windows Credential Manager). A `password.cmd`
-file is a power-user override for plugging in `1password-cli`, `pass`, etc.
+Passwords live in the OS keyring (macOS Keychain, Linux libsecret, Windows
+Credential Manager). himalaya's `auth.cmd` maps 1:1 to the humOS
+`~/.humOS/mail/{account}/password.cmd` convention, so `1password-cli`,
+`pass`, etc. plug in without humOS-specific glue.
+
+The audience for the humos-mail CLI is **agents, not humans**. Humans who
+want a pretty inbox have Gmail or Apple Mail. humos-mail's job is to give
+abots the full verb surface a human would have in a GUI — as pipeable,
+JSON-capable shell commands. Every read verb supports `--json`, every
+write verb reads stdin, no interactive prompts, IDs stable across syncs.
+An abot running in a kubo with shell access calls these verbs the same
+way a human would: `humos-mail list --unread --json | ...`. No new
+protocol layer — the CLI is the interface. (If a future abot runtime
+can't exec shell commands, an MCP or HTTP wrapper is an *additive* concern
+for that runtime, not something humOS builds upfront.)
 
 For coordination with other humans — *piping data through a human as if
 they were a Unix command* — the sibling project
@@ -102,6 +125,22 @@ code it covers. Pure functions are preferred where possible (paths and IO as
 parameters, not hardcoded), so testing does not require mocking filesystem
 globals.
 
+### 7. Prefer markdown-native conventions over invented schemas
+
+Where a markdown spec or widely-adopted inline convention already expresses
+an idea, humOS uses it rather than inventing a parallel schema or a
+separate storage directory.
+
+- Todos are GFM checkboxes (`- [ ]` / `- [x]`) inside tala notes, not rows
+  in `~/.humOS/tasks/`.
+- Calendar events are tala notes with date frontmatter or inline dates,
+  not entries in `~/.humOS/cal/`.
+- Tags and metadata use inline conventions (`@due(2026-04-20)`, `@urgent`,
+  `#project-foo`) that a human reading the raw markdown still understands.
+
+`humos-index` parses these conventions into derived views. The raw
+markdown remains the source of truth, portable to any editor.
+
 ## Worked example: mail
 
 ```
@@ -124,9 +163,9 @@ globals.
 - Adding a new account: `humos-web` → "Add account" form (or `mkdir` + `echo`
   for power users). Password goes into the OS keyring; `password.cmd` is an
   optional override.
-- `humos-fetch gmail` reads `~/.humOS/mail/gmail/imap.*`, retrieves the
-  password from the keyring, connects via native IMAP, and writes new mail
-  into `~/.humOS/mail/gmail/INBOX/new/`.
+- `humos-fetch gmail` reads `~/.humOS/mail/gmail/imap.*`, refreshes the
+  himalaya config entry for this account, and invokes himalaya to sync
+  new mail into `~/.humOS/mail/gmail/INBOX/new/` (password from keyring).
 - `humos-mail` walks `~/.humOS/mail/*/INBOX/{new,cur}` and shows unread counts
   and summaries.
 - `humos-web` serves a localhost browser UI with add-account, sync, and
@@ -144,17 +183,26 @@ contracts.
 **In progress:**
 
 - **Mail** (`humos-mail`, `humos-fetch`, `humos-web`) — multi-account Maildir
-  under `~/.humOS/mail/`. `humos-fetch` pulls mail via native IMAP.
-  `humos-web` provides a localhost browser UI with account setup, sync, and
-  archive. Sending via native SMTP is upcoming.
+  under `~/.humOS/mail/`, wrapping
+  [himalaya](https://github.com/pimalaya/himalaya) for IMAP/SMTP and JSON
+  verbs. `humos-mail` adds the cross-account layer himalaya doesn't have
+  (unified inbox, search-across-accounts via humos-index) and is designed
+  to be called by abots directly via shell. `humos-web` handles account
+  setup, sync, and archive for normies.
 
 **Planned, humOS-native:**
 
 - **Finances** (`humos-fin`) — personal ledger, transactions, budgets,
   `~/.humOS/fin/`. Likely interoperable with plain-text accounting formats
   (ledger / hledger / beancount) rather than inventing a new format.
-- **Calendar** (`humos-cal`) — read/write `~/.humOS/cal/`, ical-compatible.
-- **Tasks** (`humos-tasks`) — `~/.humOS/tasks/`.
+- **Calendar** (`humos-cal`) — a *view*, not a store. Reads tala notes
+  with date frontmatter or inline dates via humos-index and presents an
+  ical-compatible feed. No `~/.humOS/cal/` directory — the source of
+  truth is the note itself.
+- **Tasks** (`humos-tasks`) — a *view* over GFM checkboxes (`- [ ]` /
+  `- [x]`) in tala notes, with optional inline tags like `@due(2026-04-20)`
+  or `@urgent`. No `~/.humOS/tasks/` directory. A todo lives in the note
+  that explains *why* it exists; the view just collects them.
 - **Autopilot** — the layer that stitches modules together into recurring
   routines and responses. humOS is the "company"; agents (via `abot`) are
   the workers; rooms (via `kubo`) are where they work; the human approves

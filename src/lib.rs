@@ -5,9 +5,15 @@
 //! that on-disk state via this crate.
 
 pub mod account;
-pub mod imap_client;
+pub mod auth;
+pub mod cli;
+pub mod himalaya;
+pub mod himalaya_config;
 pub mod mail;
+pub mod mbsync;
+pub mod mbsync_config;
 pub mod prompts;
+pub mod shell;
 pub mod triage;
 
 use anyhow::{Context, Result};

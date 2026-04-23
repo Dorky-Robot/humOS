@@ -106,6 +106,7 @@ pub fn create_account(
     write_fact(&account_dir, "imap.port", &provider.imap_port.to_string())?;
     write_fact(&account_dir, "smtp.host", &provider.smtp_host)?;
     write_fact(&account_dir, "smtp.port", &provider.smtp_port.to_string())?;
+    write_fact(&account_dir, "smtp.login", email)?;
 
     // Store password in OS keyring.
     store_password(name, password)
@@ -170,32 +171,7 @@ fn retrieve_password(account_name: &str) -> Result<String> {
 
 // ---- config reading ----
 
-/// Read an account's IMAP configuration from its directory.
-pub fn read_imap_config(account_dir: &Path, account_name: &str) -> Result<ImapAccountConfig> {
-    let email = read_fact(account_dir, "address")?;
-    let imap_host = read_fact(account_dir, "imap.host")?;
-    let imap_port: u16 = read_fact(account_dir, "imap.port")?
-        .parse()
-        .context("parsing imap.port")?;
-    let password = get_password(account_dir, account_name)?;
-
-    Ok(ImapAccountConfig {
-        email,
-        imap_host,
-        imap_port,
-        password,
-    })
-}
-
-/// The resolved config needed to connect to an IMAP server.
-#[derive(Debug, Clone)]
-pub struct ImapAccountConfig {
-    pub email: String,
-    pub imap_host: String,
-    pub imap_port: u16,
-    pub password: String,
-}
-
+#[cfg(test)]
 fn read_fact(dir: &Path, name: &str) -> Result<String> {
     let path = dir.join(name);
     let raw = fs::read_to_string(&path)
@@ -206,6 +182,24 @@ fn read_fact(dir: &Path, name: &str) -> Result<String> {
 /// Check whether an account directory has IMAP config files (imap.host + address).
 pub fn is_fetchable(account_dir: &Path) -> bool {
     account_dir.join("imap.host").is_file() && account_dir.join("address").is_file()
+}
+
+/// Delete an account: remove its directory under `mail_root` and drop the
+/// keyring entry. Missing directory or missing keyring entry are non-fatal
+/// (the caller is making the system match an intent, not just copying state).
+pub fn delete_account(mail_root: &Path, name: &str) -> Result<()> {
+    validate_name(name)?;
+    let dir = mail_root.join(name);
+    if dir.exists() {
+        fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
+    }
+    // Keyring errors are swallowed: if the entry doesn't exist that's the
+    // desired end state. Real errors are rare and would leave an orphaned
+    // keyring entry; the user can clean those up by hand.
+    if let Ok(entry) = keyring::Entry::new("humos", name) {
+        let _ = entry.delete_credential();
+    }
+    Ok(())
 }
 
 // ================= tests =================
@@ -340,6 +334,33 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("imap.host"), "imap.y.com").unwrap();
         assert!(!is_fetchable(tmp.path()));
+    }
+
+    // ---- delete_account (filesystem side) ----
+    #[test]
+    fn delete_account_removes_the_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mail_root = tmp.path();
+        let dir = mail_root.join("gmail");
+        fs::create_dir_all(dir.join("INBOX/new")).unwrap();
+        fs::write(dir.join("address"), "x@y").unwrap();
+
+        delete_account(mail_root, "gmail").unwrap();
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn delete_account_missing_directory_is_not_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(delete_account(tmp.path(), "never-existed").is_ok());
+    }
+
+    #[test]
+    fn delete_account_rejects_path_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(delete_account(tmp.path(), "..").is_err());
+        assert!(delete_account(tmp.path(), "a/b").is_err());
+        assert!(delete_account(tmp.path(), "").is_err());
     }
 
     // ---- password.cmd override ----

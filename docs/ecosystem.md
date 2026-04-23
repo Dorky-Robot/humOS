@@ -14,7 +14,7 @@ agents self-organize around signals from the human's data.
 Seven standalone tools, each doing one thing:
 
 ```
-humOS     the human's data (mail, calendar, tasks, finances)
+humOS     the human's data (mail, finances; cal/tasks as views over tala)
 tala      the knowledge base (notes, docs, todos — git-backed markdown)
 abot      AI agent identities (create, clone, employ, integrate)
 kubo      containerized rooms where agents work
@@ -37,12 +37,17 @@ never wants AI can use `humos-fetch` and `humos-mail` and get value.
 ```
 ~/.humOS/
   mail/          ← humos-fetch, humos-mail, humos-triage, humos-send
-  cal/           ← humos-cal (planned)
-  tasks/         ← humos-tasks (planned)
   fin/           ← humos-fin (planned)
   prompts/       ← reusable LLM prompt templates
   index/         ← humos-index (cross-cutting search)
 ```
+
+Notably absent: no `tasks/`, no `cal/`. Tasks are GFM checkboxes
+(`- [ ]` / `- [x]`) inside tala notes. Calendar events are tala
+notes with date frontmatter or inline dates. `humos-index` parses
+these conventions into queryable views, and `humos-tasks` /
+`humos-cal` are *views* over tala — not owners of parallel
+directories. One source of truth, one storage layer.
 
 #### humos-index — cross-cutting search
 
@@ -65,17 +70,20 @@ glob pattern that tells the indexer where to find documents:
 # Register what to index
 humos-index source add tala   ~/.tala/notes   --type markdown --pattern "*/note.md"
 humos-index source add mail   ~/.humOS/mail   --type email    --pattern "*/INBOX/{new,cur}/*"
-humos-index source add tasks  ~/.humOS/tasks  --type markdown --pattern "*/*.md"
 
 # Search across everything
 humos-index search "project deadline"
 # → tala:   "Q2 Planning" (note abc123, line 14)
 # → mail:   "Re: deadline update" (gmail/INBOX/new/msg456)
-# → tasks:  "Submit proposal" (submit-proposal/description.md)
 
 # Filter by source
 humos-index search "project deadline" --source tala
 humos-index search "project deadline" --source mail
+
+# Query derived views: checkboxes and dates are first-class
+humos-index todos --open                   # all "- [ ]" lines, any note
+humos-index todos --open --due-before 7d   # with @due(...) tags
+humos-index events --from today --to +7d   # notes with date frontmatter
 
 # JSON output for piping to other tools / agents
 humos-index search "project deadline" --json
@@ -108,10 +116,12 @@ humos-index reindex --source mail  # just mail
 **Implementation:**
 
 - SQLite with FTS5 extension (same rusqlite + bundled as tala-core)
-- Content extractors per type: `markdown` (plain text), `email`
-  (headers + body via mail-parser), `json` (configurable fields)
+- Content extractors per type: `markdown` (plain text + GFM
+  checkbox state + inline `@due(...)` / `@urgent` tags + YAML
+  frontmatter dates), `email` (headers + body via mail-parser),
+  `json` (configurable fields)
 - Each indexed document stored as: `{source, path, title, body,
-  modified, metadata}`
+  modified, metadata}`, plus derived tables for todos and events
 - Incremental reindex: tracks file mtime, only re-parses changed
   files
 
@@ -422,7 +432,7 @@ linking.
 CEO         = the human (approves via tao)
 Workers     = abots (AI agents with git-backed identities)
 Offices     = kubos (Docker rooms where work happens)
-Wiki        = tala (knowledge base — notes, docs, SOPs)
+Wiki        = tala (notes, docs, SOPs — also where todos and events live)
 Mailroom    = humos-fetch + humos-triage (inputs)
 Outbox      = humos-send (outputs)
 Filing      = ~/.humOS/ (the human's data)

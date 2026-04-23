@@ -12,14 +12,13 @@
 //! that are exercised by the test module at the bottom of this file.
 
 use anyhow::{Context, Result};
-use humos::account::{
-    auto_provider_config, create_account, is_fetchable, read_imap_config,
-};
-use humos::imap_client::fetch_inbox;
+use humos::account::{auto_provider_config, create_account, is_fetchable};
 use humos::mail::{
     archive_message, discover_accounts, mail_report, AccountReport,
 };
+use humos::mbsync::{self, Target};
 use humos::prompts;
+use humos::shell::SystemRunner;
 use humos::triage;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -819,8 +818,15 @@ fn handle_add_account(req: &Request, mail_root: &Path) -> Response {
 }
 
 fn handle_sync(_req: &Request, mail_root: &Path) -> Response {
+    let humos_root = match mail_root.parent() {
+        Some(p) => p.to_path_buf(),
+        None => {
+            let flash = url_encode("error: mail_root has no parent");
+            return Response::redirect(&format!("/?flash={flash}"));
+        }
+    };
     let accounts = discover_accounts(mail_root);
-    let mut total = 0usize;
+    let mut synced = Vec::new();
     let mut errors = Vec::new();
 
     for account in &accounts {
@@ -828,25 +834,20 @@ fn handle_sync(_req: &Request, mail_root: &Path) -> Response {
         if !is_fetchable(&account_dir) {
             continue;
         }
-        let config = match read_imap_config(&account_dir, &account.name) {
-            Ok(c) => c,
-            Err(e) => {
-                errors.push(format!("{}: {e:#}", account.name));
-                continue;
-            }
-        };
-        match fetch_inbox(&config, &account_dir) {
-            Ok(n) => total += n,
+        match mbsync::fetch(&humos_root, &Target::One(account.name.clone()), &SystemRunner) {
+            Ok(0) => synced.push(account.name.clone()),
+            Ok(code) => errors.push(format!("{}: mbsync exited {code}", account.name)),
             Err(e) => errors.push(format!("{}: {e:#}", account.name)),
         }
     }
 
     let flash = if errors.is_empty() {
-        url_encode(&format!("Synced: {total} new message(s)"))
+        url_encode(&format!("Synced {} account(s)", synced.len()))
     } else {
         url_encode(&format!(
-            "error: {} (fetched {total} new otherwise)",
-            errors.join("; ")
+            "error: {} (synced {} otherwise)",
+            errors.join("; "),
+            synced.len()
         ))
     };
     Response::redirect(&format!("/?flash={flash}"))

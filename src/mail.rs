@@ -17,13 +17,14 @@
 //! the local filesystem.
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 // ---- entity model ----
 
 /// One mail account discovered on disk under `~/.humOS/mail/`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Account {
     /// Directory name (e.g. "gmail").
     pub name: String,
@@ -31,7 +32,7 @@ pub struct Account {
     pub address: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Summary {
     pub from: String,
     pub subject: String,
@@ -39,7 +40,7 @@ pub struct Summary {
     pub filename: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AccountReport {
     pub account: String,
     pub label: String,
