@@ -62,10 +62,12 @@ pub fn render(accounts: &[MbsyncAccount]) -> String {
         out.push_str(&format!("\nChannel {}\n", a.name));
         out.push_str(&format!("Far :{}-remote:\n", a.name));
         out.push_str(&format!("Near :{}-local:\n", a.name));
+        // Pull-only: never upload or delete on server. See the
+        // channel_block_is_pull_only test for the rationale.
         out.push_str("Patterns *\n");
-        out.push_str("Create Both\n");
+        out.push_str("Create Near\n");
         out.push_str("SyncState *\n");
-        out.push_str("Expunge Both\n");
+        out.push_str("Expunge Near\n");
     }
     out
 }
@@ -176,11 +178,24 @@ mod tests {
     }
 
     #[test]
-    fn channel_block_has_sync_options() {
+    fn channel_block_is_pull_only() {
+        // humOS uses mbsync as a downstream pull (server → local) only. Sending
+        // goes through himalaya/SMTP, not mbsync. So creates and expunges must
+        // not propagate from local to remote — otherwise mbsync will upload any
+        // local message without a remote UID mapping (the v0.1.0 footgun that
+        // created 506 duplicates in a user's Gmail on first sync).
         let out = render(&[sample("gmail")]);
-        for needle in ["Patterns *", "Create Both", "SyncState *", "Expunge Both"] {
+        for needle in ["Patterns *", "Create Near", "SyncState *", "Expunge Near"] {
             assert!(out.contains(needle), "missing {needle:?} in:\n{out}");
         }
+        assert!(
+            !out.contains("Create Both"),
+            "must not Create Both (would upload local-only messages to server):\n{out}"
+        );
+        assert!(
+            !out.contains("Expunge Both"),
+            "must not Expunge Both (would delete server messages when user archives locally):\n{out}"
+        );
     }
 
     #[test]
