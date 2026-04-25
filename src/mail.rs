@@ -184,6 +184,42 @@ pub fn mail_report(accounts: &[Account], mail_root: &Path) -> Result<Vec<Account
     Ok(out)
 }
 
+// ---- read ----
+
+/// Read the raw bytes of a single message from the maildir. Looks in
+/// `INBOX/new`, `INBOX/cur`, then `Archive/cur` in that order. Returns an
+/// error if the message is not found, or if the account/filename is suspicious
+/// (empty, contains `/`, or `..`).
+///
+/// Output is the raw on-disk bytes (RFC-822 plus any maildir metadata at the
+/// start, which there typically isn't — Maildir embeds metadata in the
+/// filename, not the file body). Suitable for piping into another tool.
+pub fn read_message(mail_root: &Path, account: &str, filename: &str) -> Result<Vec<u8>> {
+    if filename.is_empty() || filename.contains('/') || filename.contains("..") {
+        anyhow::bail!("invalid filename: {filename:?}");
+    }
+    if account.is_empty() || account.contains('/') || account.contains("..") {
+        anyhow::bail!("invalid account: {account:?}");
+    }
+
+    let account_dir = mail_root.join(account);
+    let candidates = [
+        account_dir.join("INBOX").join("new").join(filename),
+        account_dir.join("INBOX").join("cur").join(filename),
+        account_dir.join("Archive").join("cur").join(filename),
+    ];
+
+    for path in &candidates {
+        if path.is_file() {
+            return fs::read(path)
+                .with_context(|| format!("reading {}", path.display()));
+        }
+    }
+    anyhow::bail!(
+        "message {filename:?} not found in {account}/INBOX/{{new,cur}} or {account}/Archive/cur"
+    );
+}
+
 // ---- archive ----
 
 /// Move a message out of `INBOX/{new,cur}/` into `Archive/cur/` (creating the
@@ -540,6 +576,79 @@ mod tests {
         assert!(out.contains("Hi"));
         assert!(out.contains("bob@example.com"));
         assert!(out.contains("Bye"));
+    }
+
+    // ---- read_message ----
+    #[test]
+    fn read_message_returns_bytes_from_inbox_new() {
+        let tmp = tempfile::tempdir().unwrap();
+        let new_dir = tmp.path().join("gmail").join("INBOX").join("new");
+        fs::create_dir_all(&new_dir).unwrap();
+        let body = b"From: alice@example.com\r\nSubject: Hi\r\n\r\nbody bytes";
+        fs::write(new_dir.join("abc"), body).unwrap();
+
+        let got = read_message(tmp.path(), "gmail", "abc").unwrap();
+        assert_eq!(got, body);
+    }
+
+    #[test]
+    fn read_message_falls_through_to_inbox_cur() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cur_dir = tmp.path().join("gmail").join("INBOX").join("cur");
+        fs::create_dir_all(&cur_dir).unwrap();
+        let body = b"From: x@y\r\nSubject: cur\r\n\r\nin cur";
+        fs::write(cur_dir.join("xyz:2,S"), body).unwrap();
+
+        let got = read_message(tmp.path(), "gmail", "xyz:2,S").unwrap();
+        assert_eq!(got, body);
+    }
+
+    #[test]
+    fn read_message_falls_through_to_archive_cur() {
+        let tmp = tempfile::tempdir().unwrap();
+        let arc_dir = tmp.path().join("gmail").join("Archive").join("cur");
+        fs::create_dir_all(&arc_dir).unwrap();
+        let body = b"From: x@y\r\nSubject: archived\r\n\r\nin archive";
+        fs::write(arc_dir.join("old:2,S"), body).unwrap();
+
+        let got = read_message(tmp.path(), "gmail", "old:2,S").unwrap();
+        assert_eq!(got, body);
+    }
+
+    #[test]
+    fn read_message_missing_file_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("gmail").join("INBOX").join("new")).unwrap();
+        let err = read_message(tmp.path(), "gmail", "nope").unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn read_message_rejects_path_traversal_in_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(read_message(tmp.path(), "gmail", "../../etc/passwd").is_err());
+        assert!(read_message(tmp.path(), "gmail", "a/b").is_err());
+        assert!(read_message(tmp.path(), "gmail", "").is_err());
+    }
+
+    #[test]
+    fn read_message_rejects_path_traversal_in_account() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(read_message(tmp.path(), "..", "abc").is_err());
+        assert!(read_message(tmp.path(), "a/b", "abc").is_err());
+        assert!(read_message(tmp.path(), "", "abc").is_err());
+    }
+
+    #[test]
+    fn read_message_preserves_raw_bytes_including_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let new_dir = tmp.path().join("gmail").join("INBOX").join("new");
+        fs::create_dir_all(&new_dir).unwrap();
+        // Include some non-UTF-8 bytes to confirm we return raw &[u8], not a
+        // String that would lossy-replace them.
+        let body: Vec<u8> = vec![0xff, 0xfe, b'\r', b'\n', b'h', b'i'];
+        fs::write(new_dir.join("bin"), &body).unwrap();
+        assert_eq!(read_message(tmp.path(), "gmail", "bin").unwrap(), body);
     }
 
     // ---- archive_message ----

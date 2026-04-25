@@ -3,6 +3,7 @@
 //! Subcommands:
 //!   (none) | report            unread/read counts per account
 //!   fetch [account]            pull via mbsync
+//!   read [account] FILENAME    print RFC-822 of one message to stdout
 //!   send [account]             read RFC-822 on stdin, send via himalaya
 //!   triage [account]           classify unread via local LLM
 //!   account [list]             list discovered accounts
@@ -13,7 +14,7 @@ use anyhow::{Context, Result};
 use humos::account::{auto_provider_config, create_account, delete_account};
 use humos::cli::{self, Output};
 use humos::himalaya::{self, FromAccount};
-use humos::mail::{Account, discover_accounts, format_report, mail_report};
+use humos::mail::{Account, discover_accounts, format_report, mail_report, read_message};
 use humos::mbsync::{self, Target};
 use humos::shell::SystemRunner;
 use humos::triage::triage_account;
@@ -27,6 +28,7 @@ usage: humos-mail [<subcommand>] [options]
 Subcommands:
   report                       unread/read counts (default)
   fetch [account]              pull mail via mbsync
+  read [account] FILENAME      print RFC-822 of one message to stdout
   send [account]               send RFC-822 message from stdin via himalaya
   triage [account]             classify unread mail with a local LLM
   account [list]               list accounts
@@ -52,6 +54,7 @@ fn main() -> ExitCode {
         }
         Some("report") => run_report(rest),
         Some("fetch") => run_fetch(rest),
+        Some("read") => run_read(rest),
         Some("send") => run_send(rest),
         Some("triage") => run_triage(rest),
         Some("account") => run_account(rest),
@@ -63,7 +66,7 @@ fn main() -> ExitCode {
 }
 
 fn split_subcommand(args: &[String]) -> (Option<String>, Vec<String>) {
-    const VERBS: &[&str] = &["report", "fetch", "send", "triage", "account"];
+    const VERBS: &[&str] = &["report", "fetch", "read", "send", "triage", "account"];
     if let Some(first) = args.first() {
         if VERBS.contains(&first.as_str()) {
             return (Some(first.clone()), args[1..].to_vec());
@@ -126,6 +129,70 @@ fn run_fetch(args: Vec<String>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+// ---- read ----
+
+fn run_read(args: Vec<String>) -> ExitCode {
+    if wants_help(&args) {
+        println!(
+            "usage: humos-mail read [account] FILENAME\n\n\
+             Print the raw RFC-822 bytes of one message to stdout. Looks in\n\
+             INBOX/new, INBOX/cur, then Archive/cur. With no account argument,\n\
+             the single configured account is used (errors if there are several).\n\n\
+             Pipe-friendly: caller can feed the output into an LLM, tao, or\n\
+             another humos-mail invocation:\n\n  \
+               humos mail read $ID | llm 'draft a reply' | humos mail send\n"
+        );
+        return ExitCode::SUCCESS;
+    }
+    let positional: Vec<String> = args.into_iter().filter(|a| !a.starts_with('-')).collect();
+    let (account, filename) = match positional.as_slice() {
+        [filename] => (None, filename.clone()),
+        [account, filename] => (Some(account.clone()), filename.clone()),
+        _ => {
+            eprintln!("usage: humos-mail read [account] FILENAME");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match do_read(account, &filename) {
+        Ok(bytes) => {
+            // Raw bytes — message body may be binary (attachments, non-UTF-8).
+            // io::stdout().write_all is the right primitive here.
+            if let Err(e) = io::stdout().write_all(&bytes) {
+                // Broken pipe just means the downstream stage closed early.
+                if e.kind() != io::ErrorKind::BrokenPipe {
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn do_read(account: Option<String>, filename: &str) -> Result<Vec<u8>> {
+    let mail_root = humos::humos_dir()?.join("mail");
+    let account = match account {
+        Some(name) => name,
+        None => {
+            let accounts = discover_accounts(&mail_root);
+            match accounts.as_slice() {
+                [single] => single.name.clone(),
+                [] => anyhow::bail!("no accounts under ~/.humOS/mail/"),
+                _ => anyhow::bail!(
+                    "multiple accounts configured ({}); pass account name as first arg",
+                    accounts.len()
+                ),
+            }
+        }
+    };
+    read_message(&mail_root, &account, filename)
 }
 
 // ---- send ----
