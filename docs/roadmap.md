@@ -38,21 +38,26 @@ upstream knows the medium.
 ## Decisions already locked in
 
 - abot rewrite happens **on the existing repo**. History stays; spike code is replaced in-place. Diwa insights and `git log` continue to work.
-- abot phase-1 stop line is **just the twelve verbs from `docs/rewrite.md`** — no kubo integration, no tao integration, no humOS integration.
+- abot phase-1 stop line is **the twelve verbs from `docs/rewrite.md` plus a 13th, `abot run`** — LLM dispatch lives inside abot so an agent is a Unix program, not a record. No kubo integration, no tao integration, no humOS integration.
+- abot v1 LLM provider: **Ollama only**. Local-first, no API auth, matches the model-selection pattern already in `humos mail triage`.
 - Brew distribution via `dorky-robot/homebrew-tap` for every shipped binary.
 - Naming: `abot` is the kind and project; `alice`, `bob`, etc. are instance names.
 - DCI vocabulary (actor / role / context / interaction) lives only in humOS. abot says "agent." tao says "actor + action."
+- **Dev environment for any work that exercises `abot run`:** `ssh mac2024`. The dev machine doesn't have the RAM headroom for local models; mac2024 does. Code editing can happen anywhere; integration tests that hit Ollama run on mac2024.
 
 ---
 
 ## Phase 1 — Simplify abot
 
 **Goal:** abot is a headless CLI that manages agent identities as git
-repos. Drop the Flutter client, Axum server, daemon, Docker, WebAuthn,
-sessions, ring buffers — everything that isn't twelve verbs over git.
+repos *and* runs them as Unix programs. Drop the Flutter client, Axum
+server, daemon, Docker, WebAuthn, sessions, ring buffers — everything
+that isn't thirteen verbs.
 
 **Deliverable:** `brew install dorky-robot/tap/abot` gives you the
-headless CLI. ~1500–2500 lines of Rust.
+headless CLI. `echo "hi alice" | abot run alice` invokes the agent.
+~1800–3000 lines of Rust (slightly larger than the original plan to
+account for the LLM dispatch path).
 
 **Out of scope:** kubo composition, tao composition, humOS composition.
 Those are later phases.
@@ -62,7 +67,7 @@ Those are later phases.
 - [ ] Open a `headless` branch on the existing abot repo
 - [ ] Delete `flutter_client/`, `e2e/`, `playwright.config.ts`, `package*.json`, `Dockerfile.session`, `mkdocs.yml`
 - [ ] Delete `src/server/`, `src/stream/`, `src/auth/`, `src/daemon/` (everything that isn't the new CLI)
-- [ ] Strip `Cargo.toml` to: `clap`, `serde`, `serde_json`, `chrono`, `anyhow`. No `axum`, `tokio`, `bollard`, `webauthn-rs`, `rust-embed`, `rusqlite`, `tracing`
+- [ ] Strip `Cargo.toml` to: `clap`, `serde`, `serde_json`, `chrono`, `anyhow`, `ureq` (for Ollama HTTP). No `axum`, `tokio`, `bollard`, `webauthn-rs`, `rust-embed`, `rusqlite`, `tracing`
 - [ ] Implement `paths.rs` — resolve `~/.abot/` and the agent/kubo subpaths
 - [ ] Implement `git.rs` — shell-out helpers (`git init`, `worktree add/remove/list`, `branch`, `merge`, `clone`, `log`, `diff`)
 - [ ] Implement `manifest.rs` and `config.rs` — read/write the JSON files
@@ -71,8 +76,11 @@ Those are later phases.
 - [ ] Implement `employ.rs` — `employ`, `dismiss`
 - [ ] Implement `integrate.rs` — `integrate`, `discard`
 - [ ] Implement `log` and `diff` verbs
-- [ ] `main.rs` — clap dispatch for all twelve verbs
-- [ ] Tests: one integration test per verb against a temp `~/.abot/` (TDD per the humOS feedback memory — write the failing test first)
+- [ ] Add a `model` field to `config.json` (default `"llama3"` or whichever Ollama model we settle on)
+- [ ] Implement `run.rs` — read agent config, read stdin, POST to `http://localhost:11434/api/chat` with `instructions` as system prompt, stream stdout. Strict stdin → LLM → stdout; no tool use, no multi-turn, no vector DB
+- [ ] `abot run alice` runs in alice's canonical `home/`; `abot run alice --in <room>` runs in the worktree from `employ`
+- [ ] `main.rs` — clap dispatch for all thirteen verbs
+- [ ] Tests: one integration test per verb against a temp `~/.abot/` (TDD per the humOS feedback memory — write the failing test first). Git verbs test on the dev machine; `run` integration test runs against a live Ollama on `ssh mac2024`
 - [ ] Update README to match the headless model; archive the old README content under `docs/spike-readme.md`
 - [ ] Delete `BRAINSTORM.md` and `SCRATCHPAD.md` (or move under `docs/spike/`)
 - [ ] Bump `Cargo.toml` to `1.0.0` (clean break from the spike's `0.x`)
@@ -81,7 +89,10 @@ Those are later phases.
 - [ ] Update `Formula/abot.rb` in the tap to point at the new tarball
 - [ ] Verify `brew install dorky-robot/tap/abot` works on a clean machine
 
-**Phase 1 done when:** `abot create alice && abot employ alice test-room && abot integrate alice test-room` works on a fresh install with nothing else in place.
+**Phase 1 done when:** on a fresh install with Ollama running, all of these work end-to-end with nothing else in place:
+- `abot create alice && abot employ alice test-room && abot integrate alice test-room`
+- `echo "say hello in one word" | abot run alice` (returns a one-word reply)
+- `echo "summarize this" | abot run alice --in test-room` (runs in the worktree)
 
 ---
 
@@ -129,10 +140,9 @@ flat; the role layer is humOS's job in phase 4.
 
 - [ ] Add `kind: "abot" | "human"` to tao's actor record
 - [ ] Resolve abot actors via `abot show <name>` (read manifest + config; the `instructions` field becomes the system prompt)
-- [ ] Implement abot-actor invocation: `abot employ alice <session-id>` → write stdin → run agent loop (LLM call with `instructions` as system prompt) → capture stdout → `abot integrate` (or `discard` on failure)
-- [ ] Tests: a fake-LLM `Runner` that returns canned replies, exercised through tao's suspend/resume path
+- [ ] Implement abot-actor invocation: tao shells out to `abot employ alice <session-id>` (if isolation is wanted) and then `abot run alice --in <session-id>`, capturing stdout. On success: `abot integrate`. On failure: `abot discard`
+- [ ] Tests: a fake-LLM `Runner` (or a stub `abot run` that echoes canned text) exercised through tao's suspend/resume path. No live Ollama in tao's test suite
 - [ ] Document the contract: an abot actor's stdin is the same shape a human would receive; its stdout is treated as the reply
-- [ ] Decide: where does the LLM call live — inside tao, or does tao shell to `abot run alice <input>` and let abot own the model dispatch? My read: abot owns it (keeps tao model-agnostic). This may add a small `abot run` verb (a 13th verb) — flag for phase-1 scope review
 
 **Phase 3 done when:** the same tao pipeline works with a human actor and an abot actor swapped in, with no other changes.
 
