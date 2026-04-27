@@ -65,10 +65,10 @@ Those are later phases.
 
 ### Tasks
 
-- [ ] Open a `headless` branch on the existing abot repo
-- [ ] Delete `flutter_client/`, `e2e/`, `playwright.config.ts`, `package*.json`, `Dockerfile.session`, `mkdocs.yml`
-- [ ] Delete `src/server/`, `src/stream/`, `src/auth/`, `src/daemon/` (everything that isn't the new CLI)
-- [ ] Strip `Cargo.toml` to: `clap`, `serde`, `serde_json`, `chrono`, `anyhow`, `ureq` (for Ollama HTTP). No `axum`, `tokio`, `bollard`, `webauthn-rs`, `rust-embed`, `rusqlite`, `tracing`
+- [x] Open a `headless` branch on the existing abot repo
+- [x] Delete `flutter_client/`, `e2e/`, `playwright.config.ts`, `package*.json`, `Dockerfile.session`, `mkdocs.yml`
+- [x] Delete `src/server/`, `src/stream/`, `src/auth/`, `src/daemon/` (everything that isn't the new CLI)
+- [x] Strip `Cargo.toml` to: `clap`, `serde`, `serde_json`, `chrono`, `anyhow`, `ureq` (for Ollama HTTP). No `axum`, `tokio`, `bollard`, `webauthn-rs`, `rust-embed`, `rusqlite`, `tracing`
 - [ ] Implement `paths.rs` — resolve `~/.abot/` and the agent/kubo subpaths
 - [ ] Implement `git.rs` — shell-out helpers (`git init`, `worktree add/remove/list`, `branch`, `merge`, `clone`, `log`, `diff`)
 - [ ] Implement `manifest.rs` and `config.rs` — read/write the JSON files
@@ -83,8 +83,8 @@ Those are later phases.
 - [ ] `main.rs` — clap dispatch for all thirteen verbs
 - [ ] Tests: one integration test per verb against a temp `~/.abot/` (TDD per the humOS feedback memory — write the failing test first). Git verbs test on the dev machine; `run` integration test runs against a live Ollama on `ssh mac2024`
 - [ ] Update README to match the headless model; archive the old README content under `docs/spike-readme.md`
-- [ ] Delete `BRAINSTORM.md` and `SCRATCHPAD.md` (or move under `docs/spike/`)
-- [ ] Bump `Cargo.toml` to `1.0.0` (clean break from the spike's `0.x`)
+- [x] Delete `BRAINSTORM.md` and `SCRATCHPAD.md` (or move under `docs/spike/`)
+- [x] Bump `Cargo.toml` to `1.0.0` (clean break from the spike's `0.x`)
 - [ ] Build with the path-remap RUSTFLAGS (per `reference_brew_tap.md`)
 - [ ] Cut release tarball and SHA
 - [ ] Update `Formula/abot.rb` in the tap to point at the new tarball
