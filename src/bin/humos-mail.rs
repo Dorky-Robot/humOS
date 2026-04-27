@@ -2,8 +2,9 @@
 //!
 //! Subcommands:
 //!   (none) | report            unread/read counts per account
+//!   ls [account] [flags]       list messages (newest first)
+//!   cat [account] FILENAME     print RFC-822 of one message to stdout
 //!   fetch [account]            pull via mbsync
-//!   read [account] FILENAME    print RFC-822 of one message to stdout
 //!   send [account]             read RFC-822 on stdin, send via himalaya
 //!   triage [account]           classify unread via local LLM
 //!   account [list]             list discovered accounts
@@ -14,7 +15,10 @@ use anyhow::{Context, Result};
 use humos::account::{auto_provider_config, create_account, delete_account};
 use humos::cli::{self, Output};
 use humos::himalaya::{self, FromAccount};
-use humos::mail::{Account, discover_accounts, format_report, mail_report, read_message};
+use humos::mail::{
+    Account, ListOptions, MessageListing, MessageState, discover_accounts, format_report,
+    list_messages, mail_report, read_message, truncate,
+};
 use humos::mbsync::{self, Target};
 use humos::shell::SystemRunner;
 use humos::triage::triage_account;
@@ -27,8 +31,9 @@ usage: humos-mail [<subcommand>] [options]
 
 Subcommands:
   report                       unread/read counts (default)
+  ls [account] [flags]         list messages (newest first)
+  cat [account] FILENAME       print RFC-822 of one message to stdout
   fetch [account]              pull mail via mbsync
-  read [account] FILENAME      print RFC-822 of one message to stdout
   send [account]               send RFC-822 message from stdin via himalaya
   triage [account]             classify unread mail with a local LLM
   account [list]               list accounts
@@ -36,7 +41,7 @@ Subcommands:
   account remove NAME          delete account dir + keyring entry
 
 Global flags:
-  --json   emit machine-readable envelope (report / account list)
+  --json   emit machine-readable envelope (report / ls / account list)
   --help   show this message
 ";
 
@@ -53,8 +58,9 @@ fn main() -> ExitCode {
             }
         }
         Some("report") => run_report(rest),
+        Some("ls") => run_ls(rest),
+        Some("cat") => run_cat(rest),
         Some("fetch") => run_fetch(rest),
-        Some("read") => run_read(rest),
         Some("send") => run_send(rest),
         Some("triage") => run_triage(rest),
         Some("account") => run_account(rest),
@@ -66,7 +72,9 @@ fn main() -> ExitCode {
 }
 
 fn split_subcommand(args: &[String]) -> (Option<String>, Vec<String>) {
-    const VERBS: &[&str] = &["report", "fetch", "read", "send", "triage", "account"];
+    const VERBS: &[&str] = &[
+        "report", "ls", "cat", "fetch", "send", "triage", "account",
+    ];
     if let Some(first) = args.first() {
         if VERBS.contains(&first.as_str()) {
             return (Some(first.clone()), args[1..].to_vec());
@@ -131,18 +139,146 @@ fn run_fetch(args: Vec<String>) -> ExitCode {
     }
 }
 
-// ---- read ----
+// ---- ls ----
 
-fn run_read(args: Vec<String>) -> ExitCode {
+const LS_USAGE: &str = "\
+usage: humos-mail ls [account] [flags]
+
+List messages, newest first. Default: INBOX (unread + read), 25 most recent.
+
+Filters (mutually exclusive — last wins):
+  --unread     only INBOX/new/
+  --archive    only Archive/cur/
+
+Limit:
+  --limit N    cap at N messages (default 25)
+  --all        no limit
+
+Output (text mode, columns are state | from | subject | filename):
+  NEW   alice@example.com         Hello                            abc:2,S
+  SEEN  bob@example.com           Re: status                       xyz:2,S
+
+Pipe-friendly:
+  humos mail ls --unread --json | jq -r '.data[].filename'
+  humos mail ls --json | jq -r '.data[] | select(.from|test(\"@github.com\"))'
+";
+
+fn run_ls(args: Vec<String>) -> ExitCode {
+    if wants_help(&args) {
+        println!("{LS_USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    let (account, opts) = match parse_ls_args(&args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    cli::run(args, LS_USAGE, |_flags| {
+        let mail_root = humos::humos_dir()?.join("mail");
+        let account = resolve_account(account.clone(), &mail_root)?;
+        let data = list_messages(&mail_root, &account, &opts)?;
+        let human = format_listing(&data);
+        Ok(Output { data, human })
+    })
+}
+
+fn parse_ls_args(args: &[String]) -> Result<(Option<String>, ListOptions)> {
+    let mut opts = ListOptions {
+        limit: Some(25),
+        ..Default::default()
+    };
+    let mut account: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        match a.as_str() {
+            "--unread" => {
+                opts.include_unread = true;
+                opts.include_read = false;
+                opts.include_archive = false;
+            }
+            "--archive" => {
+                opts.include_unread = false;
+                opts.include_read = false;
+                opts.include_archive = true;
+            }
+            "--all" => {
+                opts.limit = None;
+            }
+            "--limit" => {
+                i += 1;
+                let n: usize = args
+                    .get(i)
+                    .ok_or_else(|| anyhow::anyhow!("--limit needs a number"))?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("--limit needs a positive integer"))?;
+                opts.limit = Some(n);
+            }
+            "--json" | "--help" | "-h" => {} // handled by cli::run
+            s if s.starts_with('-') => anyhow::bail!("unknown flag: {s}"),
+            s => {
+                if account.is_some() {
+                    anyhow::bail!("unexpected positional arg {s:?}");
+                }
+                account = Some(s.to_string());
+            }
+        }
+        i += 1;
+    }
+    Ok((account, opts))
+}
+
+fn resolve_account(explicit: Option<String>, mail_root: &std::path::Path) -> Result<String> {
+    if let Some(name) = explicit {
+        return Ok(name);
+    }
+    let accounts = discover_accounts(mail_root);
+    match accounts.as_slice() {
+        [single] => Ok(single.name.clone()),
+        [] => anyhow::bail!("no accounts under ~/.humOS/mail/"),
+        _ => anyhow::bail!(
+            "multiple accounts configured ({}); pass account name as first arg",
+            accounts.len()
+        ),
+    }
+}
+
+fn format_listing(rows: &[MessageListing]) -> String {
+    if rows.is_empty() {
+        return "no messages\n".to_string();
+    }
+    let mut out = String::new();
+    for r in rows {
+        let state = match r.state {
+            MessageState::New => "NEW ",
+            MessageState::Seen => "SEEN",
+            MessageState::Archived => "ARCH",
+        };
+        out.push_str(&format!(
+            "{}  {:<32}  {:<48}  {}\n",
+            state,
+            truncate(&r.from, 32),
+            truncate(&r.subject, 48),
+            r.filename
+        ));
+    }
+    out
+}
+
+// ---- cat ----
+
+fn run_cat(args: Vec<String>) -> ExitCode {
     if wants_help(&args) {
         println!(
-            "usage: humos-mail read [account] FILENAME\n\n\
+            "usage: humos-mail cat [account] FILENAME\n\n\
              Print the raw RFC-822 bytes of one message to stdout. Looks in\n\
              INBOX/new, INBOX/cur, then Archive/cur. With no account argument,\n\
              the single configured account is used (errors if there are several).\n\n\
-             Pipe-friendly: caller can feed the output into an LLM, tao, or\n\
-             another humos-mail invocation:\n\n  \
-               humos mail read $ID | llm 'draft a reply' | humos mail send\n"
+             Pipe-friendly:\n\n  \
+               humos mail cat $ID | llm 'draft a reply' | humos mail send\n  \
+               humos mail ls --unread --json | jq -r '.data[0].filename' | xargs humos mail cat\n"
         );
         return ExitCode::SUCCESS;
     }
@@ -151,17 +287,14 @@ fn run_read(args: Vec<String>) -> ExitCode {
         [filename] => (None, filename.clone()),
         [account, filename] => (Some(account.clone()), filename.clone()),
         _ => {
-            eprintln!("usage: humos-mail read [account] FILENAME");
+            eprintln!("usage: humos-mail cat [account] FILENAME");
             return ExitCode::FAILURE;
         }
     };
 
-    match do_read(account, &filename) {
+    match do_cat(account, &filename) {
         Ok(bytes) => {
-            // Raw bytes — message body may be binary (attachments, non-UTF-8).
-            // io::stdout().write_all is the right primitive here.
             if let Err(e) = io::stdout().write_all(&bytes) {
-                // Broken pipe just means the downstream stage closed early.
                 if e.kind() != io::ErrorKind::BrokenPipe {
                     eprintln!("error: {e}");
                     return ExitCode::FAILURE;
@@ -176,22 +309,9 @@ fn run_read(args: Vec<String>) -> ExitCode {
     }
 }
 
-fn do_read(account: Option<String>, filename: &str) -> Result<Vec<u8>> {
+fn do_cat(account: Option<String>, filename: &str) -> Result<Vec<u8>> {
     let mail_root = humos::humos_dir()?.join("mail");
-    let account = match account {
-        Some(name) => name,
-        None => {
-            let accounts = discover_accounts(&mail_root);
-            match accounts.as_slice() {
-                [single] => single.name.clone(),
-                [] => anyhow::bail!("no accounts under ~/.humOS/mail/"),
-                _ => anyhow::bail!(
-                    "multiple accounts configured ({}); pass account name as first arg",
-                    accounts.len()
-                ),
-            }
-        }
-    };
+    let account = resolve_account(account, &mail_root)?;
     read_message(&mail_root, &account, filename)
 }
 

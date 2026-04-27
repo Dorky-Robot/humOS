@@ -184,6 +184,136 @@ pub fn mail_report(accounts: &[Account], mail_root: &Path) -> Result<Vec<Account
     Ok(out)
 }
 
+// ---- list ----
+
+/// Where in the maildir a message lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageState {
+    /// `INBOX/new/` — unread
+    New,
+    /// `INBOX/cur/` — read
+    Seen,
+    /// `Archive/cur/`
+    Archived,
+}
+
+/// One row in `humos mail ls` output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MessageListing {
+    pub state: MessageState,
+    pub from: String,
+    pub subject: String,
+    pub filename: String,
+}
+
+/// Filters for [`list_messages`]. Defaults to "INBOX, both states, no limit"
+/// — the CLI applies a limit on top.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListOptions {
+    pub include_unread: bool,
+    pub include_read: bool,
+    pub include_archive: bool,
+    pub limit: Option<usize>,
+}
+
+impl Default for ListOptions {
+    fn default() -> Self {
+        ListOptions {
+            include_unread: true,
+            include_read: true,
+            include_archive: false,
+            limit: None,
+        }
+    }
+}
+
+/// List messages under `mail_root/<account>/` matching `opts`. Newest first
+/// (by file mtime). Two-phase: stat all candidate files, sort + truncate, then
+/// parse headers only for the survivors. Lets `--limit 25` stay snappy on a
+/// 10k-message inbox.
+pub fn list_messages(
+    mail_root: &Path,
+    account: &str,
+    opts: &ListOptions,
+) -> Result<Vec<MessageListing>> {
+    if account.is_empty() || account.contains('/') || account.contains("..") {
+        anyhow::bail!("invalid account: {account:?}");
+    }
+    let account_dir = mail_root.join(account);
+
+    struct Meta {
+        state: MessageState,
+        filename: String,
+        mtime: std::time::SystemTime,
+        path: PathBuf,
+    }
+
+    let mut metas: Vec<Meta> = Vec::new();
+    let mut sources: Vec<(PathBuf, MessageState)> = Vec::new();
+    if opts.include_unread {
+        sources.push((account_dir.join("INBOX").join("new"), MessageState::New));
+    }
+    if opts.include_read {
+        sources.push((account_dir.join("INBOX").join("cur"), MessageState::Seen));
+    }
+    if opts.include_archive {
+        sources.push((account_dir.join("Archive").join("cur"), MessageState::Archived));
+    }
+
+    for (dir, state) in sources {
+        if !dir.exists() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if !meta.is_file() {
+                continue;
+            }
+            let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+            let filename = entry.file_name().to_string_lossy().to_string();
+            metas.push(Meta {
+                state,
+                filename,
+                mtime,
+                path: entry.path(),
+            });
+        }
+    }
+
+    // Newest first.
+    metas.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    if let Some(limit) = opts.limit {
+        metas.truncate(limit);
+    }
+
+    let parser = mail_parser::MessageParser::default();
+    let mut out = Vec::with_capacity(metas.len());
+    for m in metas {
+        let raw = match fs::read(&m.path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let Some(msg) = parser.parse(&raw) else {
+            continue;
+        };
+        let from = extract_from(&msg);
+        let subject = msg.subject().unwrap_or("(no subject)").to_string();
+        out.push(MessageListing {
+            state: m.state,
+            from,
+            subject,
+            filename: m.filename,
+        });
+    }
+    Ok(out)
+}
+
 // ---- read ----
 
 /// Read the raw bytes of a single message from the maildir. Looks in
@@ -576,6 +706,112 @@ mod tests {
         assert!(out.contains("Hi"));
         assert!(out.contains("bob@example.com"));
         assert!(out.contains("Bye"));
+    }
+
+    // ---- list_messages ----
+    fn touch_with_mtime(dir: &Path, name: &str, from: &str, subject: &str, mtime_secs: u64) {
+        fs::create_dir_all(dir).unwrap();
+        let path = dir.join(name);
+        let body = format!("From: {from}\r\nSubject: {subject}\r\n\r\nbody");
+        fs::write(&path, body).unwrap();
+        let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime_secs);
+        filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(when)).unwrap();
+    }
+
+    #[test]
+    fn list_messages_returns_newest_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let new_dir = tmp.path().join("gmail").join("INBOX").join("new");
+        touch_with_mtime(&new_dir, "old", "alice@x", "Old", 1_000_000_000);
+        touch_with_mtime(&new_dir, "mid", "bob@x", "Mid", 1_500_000_000);
+        touch_with_mtime(&new_dir, "newest", "carol@x", "Newest", 2_000_000_000);
+
+        let out = list_messages(tmp.path(), "gmail", &ListOptions::default()).unwrap();
+        let subjects: Vec<_> = out.iter().map(|m| m.subject.as_str()).collect();
+        assert_eq!(subjects, vec!["Newest", "Mid", "Old"]);
+    }
+
+    #[test]
+    fn list_messages_default_includes_unread_and_read_skips_archive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let acct = tmp.path().join("gmail");
+        touch_with_mtime(&acct.join("INBOX").join("new"), "u", "a@x", "Unread", 100);
+        touch_with_mtime(&acct.join("INBOX").join("cur"), "r:2,S", "b@x", "Read", 200);
+        touch_with_mtime(&acct.join("Archive").join("cur"), "a:2,S", "c@x", "Archived", 300);
+
+        let out = list_messages(tmp.path(), "gmail", &ListOptions::default()).unwrap();
+        let subjects: Vec<_> = out.iter().map(|m| m.subject.as_str()).collect();
+        assert_eq!(subjects, vec!["Read", "Unread"]); // newer mtime first; archive excluded
+    }
+
+    #[test]
+    fn list_messages_with_unread_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let acct = tmp.path().join("gmail");
+        touch_with_mtime(&acct.join("INBOX").join("new"), "u", "a@x", "Unread", 100);
+        touch_with_mtime(&acct.join("INBOX").join("cur"), "r:2,S", "b@x", "Read", 200);
+
+        let opts = ListOptions {
+            include_read: false,
+            ..Default::default()
+        };
+        let out = list_messages(tmp.path(), "gmail", &opts).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].state, MessageState::New);
+        assert_eq!(out[0].subject, "Unread");
+    }
+
+    #[test]
+    fn list_messages_with_archive_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let acct = tmp.path().join("gmail");
+        touch_with_mtime(&acct.join("INBOX").join("new"), "u", "a@x", "Unread", 100);
+        touch_with_mtime(&acct.join("Archive").join("cur"), "a:2,S", "c@x", "Archived", 300);
+
+        let opts = ListOptions {
+            include_unread: false,
+            include_read: false,
+            include_archive: true,
+            ..Default::default()
+        };
+        let out = list_messages(tmp.path(), "gmail", &opts).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].state, MessageState::Archived);
+        assert_eq!(out[0].subject, "Archived");
+    }
+
+    #[test]
+    fn list_messages_respects_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let new_dir = tmp.path().join("gmail").join("INBOX").join("new");
+        for i in 0..10 {
+            touch_with_mtime(&new_dir, &format!("m{i:02}"), "x@x", &format!("S{i}"), 1000 + i);
+        }
+        let opts = ListOptions {
+            limit: Some(3),
+            ..Default::default()
+        };
+        let out = list_messages(tmp.path(), "gmail", &opts).unwrap();
+        assert_eq!(out.len(), 3);
+        // Newest 3 = mtime 1009, 1008, 1007 = subjects S9, S8, S7
+        let subjects: Vec<_> = out.iter().map(|m| m.subject.as_str()).collect();
+        assert_eq!(subjects, vec!["S9", "S8", "S7"]);
+    }
+
+    #[test]
+    fn list_messages_empty_account_dir_is_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("gmail")).unwrap();
+        let out = list_messages(tmp.path(), "gmail", &ListOptions::default()).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn list_messages_rejects_path_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(list_messages(tmp.path(), "..", &ListOptions::default()).is_err());
+        assert!(list_messages(tmp.path(), "a/b", &ListOptions::default()).is_err());
+        assert!(list_messages(tmp.path(), "", &ListOptions::default()).is_err());
     }
 
     // ---- read_message ----
