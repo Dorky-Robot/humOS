@@ -40,6 +40,7 @@ upstream knows the medium.
 - abot rewrite happens **on the existing repo**. History stays; spike code is replaced in-place. Diwa insights and `git log` continue to work.
 - abot phase-1 stop line is **the twelve verbs from `docs/rewrite.md` plus a 13th, `abot run`** — LLM dispatch lives inside abot so an agent is a Unix program, not a record. No kubo integration, no tao integration, no humOS integration.
 - abot v1 LLM provider: **Ollama only**. Local-first, no API auth, matches the model-selection pattern already in `humos mail triage`.
+- Default model for new agents: **`gemma4:31b`** — thinking model that fits agents needing to reason; already pulled and warm on mac2024. Per-agent override via `config.json`.
 - Brew distribution via `dorky-robot/homebrew-tap` for every shipped binary.
 - Naming: `abot` is the kind and project; `alice`, `bob`, etc. are instance names.
 - DCI vocabulary (actor / role / context / interaction) lives only in humOS. abot says "agent." tao says "actor + action."
@@ -76,7 +77,7 @@ Those are later phases.
 - [ ] Implement `employ.rs` — `employ`, `dismiss`
 - [ ] Implement `integrate.rs` — `integrate`, `discard`
 - [ ] Implement `log` and `diff` verbs
-- [ ] Add a `model` field to `config.json` (default `"llama3"` or whichever Ollama model we settle on)
+- [ ] Add a `model` field to `config.json` (default `"gemma4:31b"`)
 - [ ] Implement `run.rs` — read agent config, read stdin, POST to `http://localhost:11434/api/chat` with `instructions` as system prompt, stream stdout. Strict stdin → LLM → stdout; no tool use, no multi-turn, no vector DB
 - [ ] `abot run alice` runs in alice's canonical `home/`; `abot run alice --in <room>` runs in the worktree from `employ`
 - [ ] `main.rs` — clap dispatch for all thirteen verbs
