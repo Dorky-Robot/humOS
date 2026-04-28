@@ -77,23 +77,25 @@ Those are later phases.
 - [x] Implement `employ.rs` — `employ`, `dismiss`
 - [x] Implement `integrate.rs` — `integrate`, `discard`
 - [x] Implement `log` and `diff` verbs
-- [ ] Add a `model` field to `config.json` (default `"gemma4:31b"`)
+- [x] Add a `model` field to `config.json` (default `"gemma4:31b"`)
 - [x] Implement `run.rs` — read agent config, read stdin, POST to `http://localhost:11434/api/chat` with `instructions` as system prompt, stream stdout. Strict stdin → LLM → stdout; no tool use, no multi-turn, no vector DB
 - [x] `abot run alice` runs in alice's canonical `home/`; `abot run alice --in <room>` runs in the worktree from `employ`
 - [x] `main.rs` — clap dispatch for all thirteen verbs
-- [ ] Tests: one integration test per verb against a temp `~/.abot/` (TDD per the humOS feedback memory — write the failing test first). Git verbs test on the dev machine; `run` integration test runs against a live Ollama on `ssh mac2024`
-- [ ] Update README to match the headless model; archive the old README content under `docs/spike-readme.md`
+- [x] Tests: one integration test per verb against a temp `~/.abot/` (TDD per the humOS feedback memory — write the failing test first). Git verbs test on the dev machine; `run` integration test runs against a live Ollama on `ssh mac2024`
+- [x] Update README to match the headless model; archive the old README content under `docs/spike-readme.md`
 - [x] Delete `BRAINSTORM.md` and `SCRATCHPAD.md` (or move under `docs/spike/`)
 - [x] Bump `Cargo.toml` to `1.0.0` (clean break from the spike's `0.x`)
-- [ ] Build with the path-remap RUSTFLAGS (per `reference_brew_tap.md`)
-- [ ] Cut release tarball and SHA
-- [ ] Update `Formula/abot.rb` in the tap to point at the new tarball
-- [ ] Verify `brew install dorky-robot/tap/abot` works on a clean machine
+- [x] Build with the path-remap RUSTFLAGS (per `reference_brew_tap.md`)
+- [x] Cut release tarball and SHA
+- [x] Update `Formula/abot.rb` in the tap to point at the new tarball
+- [x] Verify `brew install dorky-robot/tap/abot` works on a clean machine
 
 **Phase 1 done when:** on a fresh install with Ollama running, all of these work end-to-end with nothing else in place:
 - `abot create alice && abot employ alice test-room && abot integrate alice test-room`
 - `echo "say hello in one word" | abot run alice` (returns a one-word reply)
 - `echo "summarize this" | abot run alice --in test-room` (runs in the worktree)
+
+**Phase 1 done: 2026-04-28.** v1.0.0 published, brew install verified, full lifecycle smoke passed against gemma4:31b on mac2024.
 
 ---
 
