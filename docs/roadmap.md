@@ -69,10 +69,10 @@ Those are later phases.
 - [x] Delete `flutter_client/`, `e2e/`, `playwright.config.ts`, `package*.json`, `Dockerfile.session`, `mkdocs.yml`
 - [x] Delete `src/server/`, `src/stream/`, `src/auth/`, `src/daemon/` (everything that isn't the new CLI)
 - [x] Strip `Cargo.toml` to: `clap`, `serde`, `serde_json`, `chrono`, `anyhow`, `ureq` (for Ollama HTTP). No `axum`, `tokio`, `bollard`, `webauthn-rs`, `rust-embed`, `rusqlite`, `tracing`
-- [ ] Implement `paths.rs` — resolve `~/.abot/` and the agent/kubo subpaths
-- [ ] Implement `git.rs` — shell-out helpers (`git init`, `worktree add/remove/list`, `branch`, `merge`, `clone`, `log`, `diff`)
-- [ ] Implement `manifest.rs` and `config.rs` — read/write the JSON files
-- [ ] Implement `agent.rs` — `create`, `list`, `show`, `rm`, `config`
+- [x] Implement `paths.rs` — resolve `~/.abot/` and the agent/kubo subpaths
+- [x] Implement `git.rs` — shell-out helpers (`git init`, `worktree add/remove/list`, `branch`, `merge`, `clone`, `log`, `diff`)
+- [x] Implement `manifest.rs` and `config.rs` — read/write the JSON files
+- [x] Implement `agent.rs` — `create`, `list`, `show`, `rm`, `config`
 - [ ] Implement `clone.rs` — full repo copy + manifest rename
 - [ ] Implement `employ.rs` — `employ`, `dismiss`
 - [ ] Implement `integrate.rs` — `integrate`, `discard`
