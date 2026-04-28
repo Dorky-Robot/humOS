@@ -78,9 +78,9 @@ Those are later phases.
 - [x] Implement `integrate.rs` — `integrate`, `discard`
 - [x] Implement `log` and `diff` verbs
 - [ ] Add a `model` field to `config.json` (default `"gemma4:31b"`)
-- [ ] Implement `run.rs` — read agent config, read stdin, POST to `http://localhost:11434/api/chat` with `instructions` as system prompt, stream stdout. Strict stdin → LLM → stdout; no tool use, no multi-turn, no vector DB
-- [ ] `abot run alice` runs in alice's canonical `home/`; `abot run alice --in <room>` runs in the worktree from `employ`
-- [ ] `main.rs` — clap dispatch for all thirteen verbs
+- [x] Implement `run.rs` — read agent config, read stdin, POST to `http://localhost:11434/api/chat` with `instructions` as system prompt, stream stdout. Strict stdin → LLM → stdout; no tool use, no multi-turn, no vector DB
+- [x] `abot run alice` runs in alice's canonical `home/`; `abot run alice --in <room>` runs in the worktree from `employ`
+- [x] `main.rs` — clap dispatch for all thirteen verbs
 - [ ] Tests: one integration test per verb against a temp `~/.abot/` (TDD per the humOS feedback memory — write the failing test first). Git verbs test on the dev machine; `run` integration test runs against a live Ollama on `ssh mac2024`
 - [ ] Update README to match the headless model; archive the old README content under `docs/spike-readme.md`
 - [x] Delete `BRAINSTORM.md` and `SCRATCHPAD.md` (or move under `docs/spike/`)
