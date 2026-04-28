@@ -73,10 +73,10 @@ Those are later phases.
 - [x] Implement `git.rs` — shell-out helpers (`git init`, `worktree add/remove/list`, `branch`, `merge`, `clone`, `log`, `diff`)
 - [x] Implement `manifest.rs` and `config.rs` — read/write the JSON files
 - [x] Implement `agent.rs` — `create`, `list`, `show`, `rm`, `config`
-- [ ] Implement `clone.rs` — full repo copy + manifest rename
-- [ ] Implement `employ.rs` — `employ`, `dismiss`
-- [ ] Implement `integrate.rs` — `integrate`, `discard`
-- [ ] Implement `log` and `diff` verbs
+- [x] Implement `clone.rs` — full repo copy + manifest rename
+- [x] Implement `employ.rs` — `employ`, `dismiss`
+- [x] Implement `integrate.rs` — `integrate`, `discard`
+- [x] Implement `log` and `diff` verbs
 - [ ] Add a `model` field to `config.json` (default `"gemma4:31b"`)
 - [ ] Implement `run.rs` — read agent config, read stdin, POST to `http://localhost:11434/api/chat` with `instructions` as system prompt, stream stdout. Strict stdin → LLM → stdout; no tool use, no multi-turn, no vector DB
 - [ ] `abot run alice` runs in alice's canonical `home/`; `abot run alice --in <room>` runs in the worktree from `employ`
